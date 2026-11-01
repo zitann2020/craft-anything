@@ -18,8 +18,11 @@ pub struct LangInfo {
     pub source: &'static str,
 }
 
-pub static LANGUAGES: &[LangInfo] =
-    &[LangInfo { code: "en", name: "English", source: "" }, LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv") }];
+pub static LANGUAGES: &[LangInfo] = &[
+    LangInfo { code: "en", name: "English", source: "" },
+    LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv") },
+    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv") },
+];
 
 fn current() -> &'static RwLock<(String, HashMap<String, String>)> {
     static CUR: OnceLock<RwLock<(String, HashMap<String, String>)>> = OnceLock::new();
@@ -36,10 +39,20 @@ fn parse(source: &str) -> HashMap<String, String> {
         .collect()
 }
 
-/// Switch language. Empty or unknown codes mean English.
+/// The operating system's language, or empty when it cannot be read.
+fn system_language() -> String {
+    sys_locale::get_locale().unwrap_or_default().to_ascii_lowercase()
+}
+
+/// The catalog for `code`, matching a full tag (`ja-jp`) or its language part (`ja`).
+fn language_for(code: &str) -> Option<&'static LangInfo> {
+    LANGUAGES.iter().find(|l| l.code == code || (!l.code.is_empty() && code.starts_with(&format!("{}-", l.code))))
+}
+
+/// Switch language. An empty code means the system's language; unknown codes mean English.
 pub fn set_language(code: &str) {
-    let code = code.trim().to_ascii_lowercase();
-    let lang = LANGUAGES.iter().find(|l| l.code == code);
+    let code = if code.trim().is_empty() { system_language() } else { code.trim().to_ascii_lowercase() };
+    let lang = language_for(&code);
     let map = lang.map(|l| parse(l.source)).unwrap_or_default();
     if let Ok(mut g) = current().write() {
         *g = (lang.map(|l| l.code).unwrap_or("en").to_string(), map);

@@ -237,6 +237,8 @@ pub fn install_fonts(ctx: &egui::Context) {
             fallbacks.push(name);
         }
     }
+    // Sans first: a mincho/serif fallback makes Japanese and Chinese UI text look like prose.
+    fallbacks.sort_by_key(|name| fallback_rank(name));
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "DMSans".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
     for fam in [FontFamily::Proportional, FontFamily::Monospace] {
@@ -249,6 +251,24 @@ pub fn install_fonts(ctx: &egui::Context) {
         fonts.families.insert(FontFamily::Name(fam.into()), stack);
     }
     ctx.set_fonts(fonts);
+}
+
+/// Fallback order: a Japanese UI sans first (BIZ UDPGothic), then other sans faces, then anything
+/// else, with mincho/serif last. A serif fallback makes Japanese and Chinese interface text look
+/// like a book page rather than a screen.
+fn fallback_rank(name: &str) -> u8 {
+    let n = name.to_ascii_lowercase();
+    if n.contains("udpgothic") {
+        0
+    } else if n.contains("sans cjk") {
+        1
+    } else if n.contains("gothic") || n.contains("sans") {
+        2
+    } else if n.contains("mincho") || n.contains("serif") {
+        4
+    } else {
+        3
+    }
 }
 
 pub fn medium(size: f32) -> FontId {

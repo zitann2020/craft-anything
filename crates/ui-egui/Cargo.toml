@@ -24,6 +24,8 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# The "System" language choice reads the operating system's locale (pure Rust, no services).
+sys-locale = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Native open/save dialogs, always shown from a worker thread (never blocks a frame).

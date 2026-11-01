@@ -306,8 +306,12 @@ pub fn ghidra_memory_guide() -> String {
         .iter()
         .enumerate()
         .map(|(i, (mb, gb))| {
-            let what = if i == 0 { tr("for programs up to") } else { tr("up to") };
-            format!("{gb} GB {what} {}", size(*mb))
+            let space = size(*mb);
+            if i == 0 {
+                trf("{gb} GB for programs up to {size}", &[("gb", &gb.to_string()), ("size", &space)])
+            } else {
+                trf("{gb} GB up to {size}", &[("gb", &gb.to_string()), ("size", &space)])
+            }
         })
         .collect();
     parts.push(trf("{gb} GB for bigger ones", &[("gb", &ghidra::BIG_PROGRAM_GB.to_string())]));
