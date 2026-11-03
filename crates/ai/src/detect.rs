@@ -35,6 +35,17 @@ pub fn env_keys(get: impl Fn(&str) -> Option<String>) -> Vec<Detected> {
             out.push(Detected { suggestion: cfg(name, kind, model), reason: format!("Found {var} in your environment"), needs_key: false });
         }
     }
+    // Hosted APIs we know by name. Offered only when their key is already set, like OpenAI and
+    // Anthropic, so a paid service is never advertised to someone who has no key for it.
+    for p in crate::providers::PROVIDERS {
+        if let Some(var) = p.key_names().find(|var| get(var).is_some_and(|v| !v.trim().is_empty())) {
+            out.push(Detected {
+                suggestion: cfg_at(p.name, p.kind, p.default_model, p.base_url),
+                reason: format!("Found {var} in your environment"),
+                needs_key: false,
+            });
+        }
+    }
     // A Google AI Studio key is free and the easiest one to get (#646): always offered, found or pasted.
     let gemini = get("GEMINI_API_KEY").is_some_and(|v| !v.trim().is_empty());
     out.push(Detected {
@@ -360,6 +371,19 @@ mod tests {
         assert!(!g.needs_key && g.reason.contains("GEMINI_API_KEY"));
         assert_eq!(g.suggestion.model, crate::openai::GEMINI_DEFAULT_MODEL);
         assert!(BackendKind::Gemini.needs_key());
+    }
+
+    /// A named provider is offered when its key is set, with its own base URL and default model.
+    #[test]
+    fn a_provider_key_offers_that_provider() {
+        let d = env_keys(|v| (v == "MOONSHOT_API_KEY").then(|| "k".to_string()));
+        let p = d.iter().find(|x| x.suggestion.name == "Moonshot").expect("Moonshot offered");
+        assert!(!p.needs_key);
+        assert!(p.reason.contains("MOONSHOT_API_KEY"));
+        assert_eq!(p.suggestion.base_url.as_deref(), Some("https://api.moonshot.ai/v1"));
+        assert_eq!(p.suggestion.model.as_str(), "kimi-k3.1-pro");
+        // A key that nobody has does not add a row.
+        assert!(d.iter().all(|x| x.suggestion.name != "DeepSeek"));
     }
 
     #[test]

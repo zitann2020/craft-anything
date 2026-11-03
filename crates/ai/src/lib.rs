@@ -22,6 +22,7 @@ pub mod model_tools;
 pub mod openai;
 pub mod price;
 pub mod prompt;
+pub mod providers;
 pub mod rebuild;
 pub mod ssh;
 
@@ -635,8 +636,12 @@ impl AiHub {
     pub fn has_key(&self, name: &str) -> bool {
         self.config().get(name).is_some_and(|b| {
             let base = b.config.base_url.as_deref().unwrap_or("");
-            if b.config.kind == BackendKind::OpenaiCompatible && openai::is_opencode_go(base) {
-                return self.keys.resolve(name, b.config.kind).is_some() || go_env_key(base).is_some();
+            if b.config.kind == BackendKind::OpenaiCompatible {
+                // A local server holds no key; a hosted one is only ready once its key is somewhere.
+                if openai::is_opencode_go(base) || providers::of_base(base).is_some() {
+                    return self.keys.resolve(name, b.config.kind).is_some() || go_env_key(base).is_some() || providers::env_key(base).is_some();
+                }
+                return true;
             }
             !b.config.kind.needs_key() || self.keys.resolve(name, b.config.kind).is_some()
         })
@@ -657,9 +662,14 @@ impl AiHub {
 
     fn key_for(&self, e: &BackendEntry) -> Result<String, ToolError> {
         let base = e.config.base_url.as_deref().unwrap_or("");
-        self.keys.resolve(&e.config.name, e.config.kind).or_else(|| go_env_key(base)).ok_or_else(|| {
-            let var =
-                if openai::is_opencode_go(base) { "OPENCODEGO_API_KEY or OPENCODE_GO_API_KEY" } else { keys::env_var(e.config.kind).unwrap_or("an API key") };
+        self.keys.resolve(&e.config.name, e.config.kind).or_else(|| go_env_key(base).or_else(|| providers::env_key(base))).ok_or_else(|| {
+            let var = if openai::is_opencode_go(base) {
+                "OPENCODEGO_API_KEY or OPENCODE_GO_API_KEY"
+            } else if e.config.kind == BackendKind::OpenaiCompatible {
+                providers::of_base(base).map_or("an API key", |p| p.key_env)
+            } else {
+                keys::env_var(e.config.kind).unwrap_or("an API key")
+            };
             ToolError::new(ErrorCode::BadSettings, format!("{} has no API key.", e.config.name))
                 .with_remediation(format!("Add the key in Settings → AI, or set {var}."))
         })
@@ -702,7 +712,7 @@ impl AiHub {
             BackendKind::Gemini => Box::new(openai::OpenAi::gemini(base, self.key_for(e)?, &c.model)),
             BackendKind::OpenaiCompatible => {
                 let base = base.unwrap_or("http://127.0.0.1:11434/v1");
-                let key = self.keys.get(&c.name).or_else(|| go_env_key(base));
+                let key = self.keys.get(&c.name).or_else(|| go_env_key(base).or_else(|| providers::env_key(base)));
                 let mut o = compatible_client(&c.name, base, key, &c.model, &self.session_id());
                 o.react = e.options.react_fallback.unwrap_or(false);
                 Box::new(o)
@@ -829,7 +839,7 @@ impl AiHub {
                     return Err(ToolError::unavailable("Listing models on a remote server isn't supported yet.").with_remediation("Type the model name."));
                 }
                 let b = base.unwrap_or("http://127.0.0.1:11434/v1");
-                let key = self.keys.get(&e.config.name).or_else(|| go_env_key(b));
+                let key = self.keys.get(&e.config.name).or_else(|| go_env_key(b).or_else(|| providers::env_key(b)));
                 if openai::is_opencode_go(b) {
                     // The chat base ends in /openai/v1; the model list answers at /v1 instead.
                     return compatible_client(&e.config.name, &opencode_go_models_base(b), key, "", "").list_models(t);
@@ -943,7 +953,7 @@ fn reach(e: &BackendEntry, key: Option<String>) -> Result<u64, String> {
         }
         BackendKind::OpenaiCompatible => {
             let b = base.unwrap_or("http://127.0.0.1:11434/v1");
-            let key = key.or_else(|| go_env_key(b));
+            let key = key.or_else(|| go_env_key(b).or_else(|| providers::env_key(b)));
             if openai::is_opencode_go(b) {
                 // The list answers at /v1, not under the chat path's /openai/v1. A key is still
                 // required here, so "reachable" never means "callable without one".

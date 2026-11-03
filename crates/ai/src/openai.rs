@@ -254,10 +254,21 @@ pub fn messages_json(m: &Msg, react: bool) -> Vec<Value> {
                 .map(|(id, name, input)| json!({"id": id, "type": "function", "function": {"name": name, "arguments": input.to_string()}}))
                 .collect();
             let mut v = json!({"role": "assistant", "content": text});
-            if !calls.is_empty()
-                && let Some(o) = v.as_object_mut()
-            {
-                o.insert("tool_calls".into(), Value::Array(calls));
+            let reasoning: String = m
+                .blocks
+                .iter()
+                .filter_map(|b| match b {
+                    Block::Thinking { thinking, .. } => Some(thinking.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if let Some(o) = v.as_object_mut() {
+                if !calls.is_empty() {
+                    o.insert("tool_calls".into(), Value::Array(calls));
+                }
+                if !reasoning.is_empty() {
+                    o.insert("reasoning_content".into(), Value::String(reasoning));
+                }
             }
             vec![v]
         }
@@ -275,6 +286,9 @@ struct CallAcc {
 #[derive(Debug, Default)]
 pub struct ChatStream {
     text: String,
+    /// Reasoning the model streamed, replayed on the next request in a tool loop (DeepSeek asks
+    /// for it explicitly, and answers 400 when a request with tools leaves it out).
+    thinking: String,
     calls: BTreeMap<u64, CallAcc>,
     pub usage: Usage,
     pub finish: Option<String>,
@@ -324,6 +338,7 @@ impl ChatStream {
             on_delta(Delta::Text(t.to_string()));
         }
         if let Some(t) = d.get("reasoning_content").or_else(|| d.get("reasoning")).and_then(Value::as_str).filter(|t| !t.is_empty()) {
+            self.thinking.push_str(t);
             on_delta(Delta::Thinking(t.to_string()));
         }
         if let Some(calls) = d.get("tool_calls").and_then(Value::as_array) {
@@ -352,6 +367,9 @@ impl ChatStream {
 
     pub fn finish(self, fallback_model: &str) -> Result<TurnResult, ToolError> {
         let mut blocks = Vec::new();
+        if !self.thinking.is_empty() {
+            blocks.push(Block::Thinking { thinking: self.thinking, signature: String::new() });
+        }
         if !self.text.is_empty() {
             blocks.push(Block::Text { text: self.text });
         }
@@ -549,6 +567,26 @@ fn react_postprocess(r: &mut TurnResult, tools: &[ToolDef], react: bool) {
 mod tests {
     use super::*;
     use crate::model::Effort;
+
+    /// DeepSeek answers 400 when a request with tools leaves out the reasoning it streamed, so the
+    /// assistant turn carries it back.
+    #[test]
+    fn reasoning_is_replayed_on_a_tool_turn() {
+        let msg = Msg {
+            role: Speaker::Assistant,
+            blocks: vec![
+                Block::Thinking { thinking: "look at the file".into(), signature: String::new() },
+                Block::ToolUse { id: "c1".into(), name: "read".into(), input: json!({"path": "a"}) },
+            ],
+        };
+        let json = messages_json(&msg, false);
+        assert_eq!(json[0]["reasoning_content"], "look at the file");
+        assert_eq!(json[0]["tool_calls"][0]["id"], "c1");
+
+        // The ReAct protocol sends plain text, so there is no reasoning to replay there.
+        let react = messages_json(&msg, true);
+        assert!(react[0].get("reasoning_content").is_none());
+    }
 
     /// Only the real OpenCode Go base gets its session header: not a look-alike host, path or scheme.
     #[test]
